@@ -290,19 +290,46 @@ export default function App() {
       alarmRef.current.play().catch(e => console.log(e));
     }
 
+    // --- LOGIC PERUBAHAN DI SINI ---
     if (mode === TimerMode.POMODORO) {
+      // 1. Hitung total durasi target dalam detik
+      const targetDurationSeconds = settings.durations[mode] * 60;
+      
+      // 2. Hitung berapa detik yang SUDAH berjalan (Elapsed)
+      // Kita gunakan Math.max(0, ...) untuk menghindari angka negatif
+      const elapsedSeconds = Math.max(0, targetDurationSeconds - timeLeft);
+      
+      // 3. Konversi ke menit (dibulatkan ke bawah atau ke menit terdekat)
+      // Jika selesai natural (timeLeft=0), hasilnya full. Jika di-cut tengah jalan, hasilnya parsial.
+      // Kita pakai Math.floor agar tercatat menit penuh yang sudah dilalui.
+      // Opsional: Gunakan Math.max(1, ...) jika ingin minimal mencatat 1 menit.
+      const minutesToAdd = Math.floor(elapsedSeconds / 60);
+
       if (activeTaskId) {
         setTasks(prev => prev.map(t => 
+          // Update completedPomos bisa tetap +1 (dihitung 1 sesi) atau mau proporsional?
+          // Biasanya "Session" tetap dihitung 1 kali "mark as done", tapi menitnya yang disesuaikan.
           t.id === activeTaskId ? { ...t, completedPomos: t.completedPomos + 1 } : t
         ));
       }
+      
       const today = new Date().toISOString().split('T')[0];
       setDailyStats(prev => {
         const existing = prev.find(s => s.date === today);
         if (existing) {
-          return prev.map(s => s.date === today ? { ...s, minutes: s.minutes + settings.durations[mode], sessions: s.sessions + 1 } : s);
+          return prev.map(s => 
+            s.date === today ? { 
+              ...s, 
+              minutes: s.minutes + minutesToAdd, // <--- UPDATE: Pakai minutesToAdd, bukan settings.durations
+              sessions: s.sessions + 1 
+            } : s
+          );
         } else {
-          return [...prev, { date: today, minutes: settings.durations[mode], sessions: 1 }];
+          return [...prev, { 
+            date: today, 
+            minutes: minutesToAdd, // <--- UPDATE: Pakai minutesToAdd
+            sessions: 1 
+          }];
         }
       });
 

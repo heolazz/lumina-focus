@@ -29,7 +29,7 @@ export const Settings: React.FC<SettingsProps> = ({ settings, updateSettings, in
   // State untuk modal konfirmasi
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
-  const presets = [1, 25, 30, 45, 60, 90];
+  const presets = [5, 25, 30, 45, 60, 90];
 
   const updateDuration = (mode: TimerMode, val: number) => {
     updateSettings({
@@ -148,8 +148,8 @@ export const Settings: React.FC<SettingsProps> = ({ settings, updateSettings, in
                
                <div className="bg-white/10 backdrop-blur-sm rounded-[2rem] p-4 border border-white/20 flex flex-col items-center">
                   <span className="text-white/80 text-xs font-bold uppercase mb-3 tracking-wider">Long Break</span>
-                  <div className="flex items-center justify-between w-full px-2">
-                     <button onClick={() => updateDuration(TimerMode.LONG_BREAK, Math.max(1, settings.durations[TimerMode.LONG_BREAK] - 5))} className="w-10 h-10 flex items-center justify-center bg-white/20 rounded-full text-white hover:bg-white/40 transition-colors font-bold text-xl">-</button>
+                  <div className="flex items-center justify-between w-full">
+                     <button onClick={() => updateDuration(TimerMode.LONG_BREAK, Math.max(15, settings.durations[TimerMode.LONG_BREAK] - 5))} className="w-10 h-10 flex items-center justify-center bg-white/20 rounded-full text-white hover:bg-white/40 transition-colors font-bold text-xl">-</button>
                      <span className="text-3xl font-black text-white">{settings.durations[TimerMode.LONG_BREAK]}</span>
                      <button onClick={() => updateDuration(TimerMode.LONG_BREAK, settings.durations[TimerMode.LONG_BREAK] + 5)} className="w-10 h-10 flex items-center justify-center bg-white/20 rounded-full text-white hover:bg-white/40 transition-colors font-bold text-xl">+</button>
                   </div>

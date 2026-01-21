@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { PersimmonMascot } from './Mascot';
+import { supabase } from '../supabase'; // Pastikan path ini sesuai dengan letak supabase.ts Anda
 
 interface AuthProps {
   onLogin: () => void;
@@ -14,7 +15,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [greeting, setGreeting] = useState('');
   
-  // STATE BARU: Untuk trigger animasi exit
+  // State animasi sukses
   const [isSuccess, setIsSuccess] = useState(false);
 
   useEffect(() => {
@@ -24,20 +25,43 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     else setGreeting('Good Evening!');
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    
-    // Simulasi proses login
-    setTimeout(() => {
+
+    try {
+        if (isLogin) {
+            // --- LOGIKA LOGIN SUPABASE ---
+            const { error } = await supabase.auth.signInWithPassword({
+                email,
+                password,
+            });
+
+            if (error) throw error;
+            
+            // Jika sukses login
+            setIsSuccess(true);
+            setTimeout(() => {
+                onLogin(); // Panggil fungsi parent untuk masuk ke App
+            }, 800);
+
+        } else {
+            // --- LOGIKA SIGN UP SUPABASE ---
+            const { error } = await supabase.auth.signUp({
+                email,
+                password,
+            });
+
+            if (error) throw error;
+
+            alert('Registration successful! Please check your email to confirm your account.');
+            setIsLogin(true); // Pindah ke mode login
+        }
+    } catch (error: any) {
+        alert(error.message || 'An error occurred');
+    } finally {
         setIsLoading(false);
-        setIsSuccess(true); // Trigger animasi
-        
-        // Tunggu animasi selesai baru pindah state
-        setTimeout(() => {
-            onLogin();
-        }, 800); 
-    }, 1500);
+    }
   };
 
   return (
@@ -51,7 +75,6 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
             >
-                {/* Lingkaran Oranye Membesar */}
                 <motion.div 
                     className="absolute bg-orange-500 rounded-full"
                     initial={{ width: 0, height: 0 }}
@@ -59,7 +82,6 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                     transition={{ duration: 0.8, ease: "easeInOut" }}
                 />
                 
-                {/* Maskot di Tengah */}
                 <motion.div 
                     className="relative z-10 flex flex-col items-center"
                     initial={{ scale: 0.5, opacity: 0 }}
@@ -80,7 +102,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
         )}
       </AnimatePresence>
 
-      {/* --- KONTEN UTAMA --- */}
+      {/* --- KONTEN UTAMA (SAMA SEPERTI SEBELUMNYA) --- */}
       <div className="hidden lg:flex lg:w-5/12 bg-nature-500 relative flex-col items-center justify-center p-12 text-white z-10">
          <div className="absolute top-[-20%] left-[-20%] w-[80%] h-[80%] bg-nature-400 rounded-full blur-[80px] opacity-50"></div>
          <div className="absolute bottom-[-20%] right-[-20%] w-[80%] h-[80%] bg-yellow-400 rounded-full blur-[80px] opacity-20"></div>
@@ -170,8 +192,9 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             required
+                            minLength={6}
                             className="w-full bg-slate-50 lg:bg-white border-2 border-slate-100 lg:border-slate-200 rounded-2xl pl-12 pr-12 py-4 font-bold text-slate-700 placeholder:text-slate-400 focus:outline-none focus:border-nature-500 focus:bg-white transition-all shadow-sm lg:shadow-none"
-                            placeholder="Password"
+                            placeholder="Password (min 6 chars)"
                         />
                         <button
                             type="button"

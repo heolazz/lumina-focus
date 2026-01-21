@@ -9,7 +9,7 @@ import { Stats } from './components/Stats';
 import { Settings } from './components/Settings';
 import { Auth } from './components/Auth';
 import { PersimmonMascot } from './components/Mascot';
-import { supabase } from './supabase'; // Pastikan path ini benar
+import { supabase } from './supabase'; 
 
 // --- DATA & KONFIGURASI ---
 const MODE_CONFIG = {
@@ -101,21 +101,65 @@ const AUDIO_URLS = {
 
 // --- MAIN COMPONENT ---
 export default function App() {
-  // 1. AUTH STATE
+  const [isSessionLoading, setIsSessionLoading] = useState(true); 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
 
-  // 2. APP STATES
-  const [activeTab, setActiveTab] = useState<TabView>('TIMER');
-  const [mode, setMode] = useState<TimerMode>(TimerMode.POMODORO);
+  // --- PERSISTED STATES ---
+  const [activeTab, setActiveTab] = useState<TabView>(() => {
+      const saved = localStorage.getItem('lumina_active_tab');
+      return (saved as TabView) || 'TIMER';
+  });
+
+  const [mode, setMode] = useState<TimerMode>(() => {
+      return (localStorage.getItem('lumina_mode') as TimerMode) || TimerMode.POMODORO;
+  });
   
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(() => {
+      return localStorage.getItem('lumina_activeTaskId');
+  });
+
+  const [isActive, setIsActive] = useState(() => {
+      return localStorage.getItem('lumina_isActive') === 'true';
+  });
+
+  const [endTime, setEndTime] = useState<number | null>(() => {
+      const stored = localStorage.getItem('lumina_endTime');
+      return stored ? parseInt(stored) : null;
+  });
+
+  const [timeLeft, setTimeLeft] = useState(() => {
+      const storedIsActive = localStorage.getItem('lumina_isActive') === 'true';
+      const storedEndTime = localStorage.getItem('lumina_endTime');
+      const storedTimeLeft = localStorage.getItem('lumina_timeLeft');
+
+      if (storedIsActive && storedEndTime) {
+          const end = parseInt(storedEndTime);
+          const now = Date.now();
+          const diff = Math.ceil((end - now) / 1000);
+          return diff > 0 ? diff : 0;
+      }
+      return storedTimeLeft ? parseInt(storedTimeLeft) : DEFAULT_SETTINGS.durations[TimerMode.POMODORO] * 60;
+  });
+
+  // --- SAVE STATES ---
+  useEffect(() => {
+      localStorage.setItem('lumina_active_tab', activeTab);
+      localStorage.setItem('lumina_mode', mode);
+      localStorage.setItem('lumina_isActive', String(isActive));
+      localStorage.setItem('lumina_timeLeft', String(timeLeft));
+      
+      if (endTime) localStorage.setItem('lumina_endTime', String(endTime));
+      else localStorage.removeItem('lumina_endTime');
+      
+      if (activeTaskId) localStorage.setItem('lumina_activeTaskId', activeTaskId);
+      else localStorage.removeItem('lumina_activeTaskId');
+  }, [activeTab, mode, isActive, timeLeft, endTime, activeTaskId]);
+
+
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [dailyStats, setDailyStats] = useState<DailyStat[]>([]);
-  
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  const [timeLeft, setTimeLeft] = useState(DEFAULT_SETTINGS.durations[TimerMode.POMODORO] * 60);
-  const [isActive, setIsActive] = useState(false);
   
   // UI States
   const [isTransitioning, setIsTransitioning] = useState(false); 
@@ -124,17 +168,15 @@ export default function App() {
   const [completionType, setCompletionType] = useState<'FOCUS_DONE' | 'BREAK_DONE' | null>(null);
   const [currentQuote, setCurrentQuote] = useState("");
   const [showConfetti, setShowConfetti] = useState(false);
-  const [endTime, setEndTime] = useState<number | null>(null);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
   const alarmRef = useRef<HTMLAudioElement>(null);
   const noiseRef = useRef<HTMLAudioElement>(null);
   const isInitialLoad = useRef(true);
 
-  // --- INITIAL DATA FETCHING (SUPABASE) ---
+  // --- DATA FETCHING ---
   const fetchUserData = async (uid: string) => {
     try {
-      // 1. Fetch Settings
       const { data: settingsData } = await supabase.from('settings').select('*').eq('user_id', uid).single();
       if (settingsData) {
         setSettings({
@@ -150,7 +192,6 @@ export default function App() {
         });
       }
 
-      // 2. Fetch Tasks
       const { data: tasksData } = await supabase.from('tasks').select('*').eq('user_id', uid).order('created_at', { ascending: false });
       if (tasksData) {
         const mappedTasks: Task[] = tasksData.map(t => ({
@@ -164,27 +205,25 @@ export default function App() {
         setTasks(mappedTasks);
       }
 
-      // 3. Fetch Stats
       const { data: statsData } = await supabase.from('daily_stats').select('*').eq('user_id', uid);
       if (statsData) {
         setDailyStats(statsData);
       }
-      
       isInitialLoad.current = false;
-
     } catch (error) {
         console.error("Error fetching data:", error);
     }
   };
 
-  // Check Auth Session on Mount
   useEffect(() => {
+    // FIX: Hapus delay, langsung cek session
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
         setIsAuthenticated(true);
         setUserId(session.user.id);
         fetchUserData(session.user.id);
       }
+      setIsSessionLoading(false); 
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -198,23 +237,24 @@ export default function App() {
         setTasks([]);
         setDailyStats([]);
       }
+      setIsSessionLoading(false);
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  const handleLoginSuccess = () => {
-    // Handled by onAuthStateChange
-  };
+  const handleLoginSuccess = () => { };
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setIsAuthenticated(false);
     setActiveTab('TIMER');
     setMode(TimerMode.POMODORO);
+    localStorage.removeItem('lumina_isActive');
+    localStorage.removeItem('lumina_endTime');
+    localStorage.removeItem('lumina_timeLeft');
   };
 
-  // --- SYNC SETTINGS TO DB ---
   const updateSettings = async (newSettings: Partial<AppSettings>) => {
     const updated = { ...settings, ...newSettings };
     setSettings(updated);
@@ -233,10 +273,8 @@ export default function App() {
     }
   };
 
-  // --- SYNC TASKS TO DB (UPSERT) ---
   useEffect(() => {
     if (isInitialLoad.current || !userId || tasks.length === 0) return;
-
     const timer = setTimeout(async () => {
         const tasksToUpsert = tasks.map(t => ({
             id: t.id,
@@ -247,37 +285,24 @@ export default function App() {
             completed_pomos: t.completedPomos,
             tag: t.tag
         }));
-
         const { error } = await supabase.from('tasks').upsert(tasksToUpsert);
         if (error) console.error("Error syncing tasks:", error);
     }, 1000); 
-
     return () => clearTimeout(timer);
   }, [tasks, userId]);
 
-  // --- DELETE TASK FUNCTION ---
   const handleDeleteTask = async (taskId: string) => {
-    // 1. Optimistic Update (Hapus di UI dulu)
     const newTasks = tasks.filter(t => t.id !== taskId);
     setTasks(newTasks);
-    
-    // Jika task yang dihapus sedang aktif, matikan timer
     if (activeTaskId === taskId) {
         setActiveTaskId(null);
         setIsActive(false);
+        setEndTime(null);
     }
-
-    // 2. Hapus dari Database
     if (userId) {
-        const { error } = await supabase.from('tasks').delete().eq('id', taskId);
-        if (error) {
-            console.error("Error deleting task:", error);
-        }
+        await supabase.from('tasks').delete().eq('id', taskId);
     }
   };
-
-
-  // --- APP LOGIC (TIMER & EFFECT) ---
 
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: any) => {
@@ -320,10 +345,10 @@ export default function App() {
   }, [formattedTime, isActive, isPausedMode, mode]);
 
   useEffect(() => {
-    if (!isActive && !isPausedMode && !pendingMode && !completionType) {
+    if (!isActive && !isPausedMode && !pendingMode && !completionType && !endTime) {
       setTimeLeft(settings.durations[mode] * 60);
     }
-  }, [settings.durations, mode]); 
+  }, [settings.durations, mode, isActive, isPausedMode, pendingMode, completionType, endTime]); 
 
   useEffect(() => {
     if (!noiseRef.current) return;
@@ -354,7 +379,6 @@ export default function App() {
     setPendingMode(null);
     setCompletionType(null);
     setShowConfetti(false);
-    
     if (autoStart) {
        setEndTime(Date.now() + newDuration * 1000);
     }
@@ -384,6 +408,11 @@ export default function App() {
     setEndTime(null);
     setShowConfetti(true);
     
+    if (alarmRef.current) {
+      alarmRef.current.currentTime = 0;
+      alarmRef.current.play().catch(e => console.log(e));
+    }
+
     if ("Notification" in window && Notification.permission === "granted") {
       new Notification(mode === TimerMode.POMODORO ? "Session Complete! 🎉" : "Break is Over! ⏰", {
         body: mode === TimerMode.POMODORO ? "Great job! Time to take a break." : "Ready to focus again?",
@@ -391,27 +420,18 @@ export default function App() {
       });
     }
 
-    if (alarmRef.current) {
-      alarmRef.current.currentTime = 0;
-      alarmRef.current.play().catch(e => console.log(e));
-    }
-
     if (mode === TimerMode.POMODORO) {
-      // 1. Calculate Elapsed Minutes
       const targetDurationSeconds = settings.durations[mode] * 60;
       const elapsedSeconds = Math.max(0, targetDurationSeconds - timeLeft);
       const minutesToAdd = Math.floor(elapsedSeconds / 60);
 
-      // 2. Update Task Pomo Count
       if (activeTaskId) {
         setTasks(prev => prev.map(t => 
           t.id === activeTaskId ? { ...t, completedPomos: t.completedPomos + 1 } : t
         ));
       }
 
-      // 3. Update & Sync Daily Stats
       const today = new Date().toISOString().split('T')[0];
-      
       setDailyStats(prev => {
         const existing = prev.find(s => s.date === today);
         if (existing) {
@@ -423,7 +443,6 @@ export default function App() {
 
       if (userId) {
           const { data: existingStat } = await supabase.from('daily_stats').select('*').eq('user_id', userId).eq('date', today).single();
-          
           if (existingStat) {
              await supabase.from('daily_stats').update({
                  minutes: existingStat.minutes + minutesToAdd,
@@ -495,6 +514,7 @@ export default function App() {
       interval = window.setInterval(() => {
         const now = Date.now();
         const diff = endTime - now;
+        
         if (diff <= 0) {
           setTimeLeft(0);
           handleTimerComplete();
@@ -515,12 +535,26 @@ export default function App() {
   const todayStats = dailyStats.find(s => s.date === todayStr);
   const sessionsToday = todayStats ? todayStats.sessions : 0;
 
+  // --- SIMPLE LOADING STATE (FAST & SPINNING) ---
+  if (isSessionLoading) {
+      return (
+          <div className="min-h-screen w-full flex items-center justify-center bg-nature-50">
+              <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+              >
+                  <PersimmonMascot happy={true} className="w-20 h-20" />
+              </motion.div>
+          </div>
+      );
+  }
+
   if (!isAuthenticated) {
       return <Auth onLogin={handleLoginSuccess} />;
   }
 
   return (
-    <div className={`flex flex-col h-[100dvh] font-sans transition-colors duration-500 overflow-hidden ${bgClass}`}>
+    <div className={`flex flex-col h-[100dvh] font-sans transition-colors duration-500 overflow-hidden relative ${bgClass}`}>
       <audio ref={alarmRef} src={AUDIO_URLS.ALARM} />
       <audio ref={noiseRef} />
 
@@ -623,7 +657,7 @@ export default function App() {
          <Sidebar currentTab={activeTab} setTab={setActiveTab} isDarkBg={isFocusMode} />
       </div>
       
-      <main className="flex-1 w-full relative h-full overflow-hidden">
+      <main className="flex-1 w-full relative h-full overflow-hidden z-10">
         
         <div className={`h-full w-full ${activeTab === 'SETTINGS' ? 'overflow-y-auto pb-24 md:pb-0' : 'hidden'}`}>
              <Settings 
@@ -637,6 +671,7 @@ export default function App() {
 
         {activeTab === 'TIMER' && (
           <div className="flex flex-col md:flex-row items-center justify-center md:justify-center h-full w-full px-6 pt-8 pb-28 md:pb-0 md:pt-0 gap-4 md:gap-16 max-w-5xl mx-auto relative">
+             
              <div className="absolute inset-0 pointer-events-none overflow-hidden">
                 <div className="absolute top-[5%] left-[5%] w-[50%] h-[50%] bg-white opacity-5 rounded-full blur-[120px]"></div>
              </div>
@@ -657,7 +692,7 @@ export default function App() {
                 <div className="transform transition-transform duration-500 scale-75 md:scale-110">
                   <CircularTimer progress={progress} isInverted={true} size={320} strokeWidth={6}>
                       <div className="flex flex-col items-center">
-                        <span className="text-[6rem] font-black tracking-tighter text-white tabular-nums leading-none drop-shadow-sm">{formattedTime}</span>
+                        <span className={`text-[6rem] font-black tracking-tighter text-white tabular-nums leading-none drop-shadow-sm`}>{formattedTime}</span>
                         <div className="flex flex-col items-center gap-1 mt-2">
                            <span className="text-white/60 text-xs font-bold tracking-[0.2em] uppercase">{MODE_CONFIG[mode].label}</span>
                            {timeLeft !== settings.durations[mode] * 60 && !isActive ? (
@@ -719,7 +754,7 @@ export default function App() {
                 setTasks={setTasks} 
                 activeTaskId={activeTaskId} 
                 setActiveTaskId={(id) => { setActiveTaskId(id); if(id) setActiveTab('TIMER'); }}
-                onDelete={handleDeleteTask} // <--- PROPS PENTING UNTUK DELETE
+                onDelete={handleDeleteTask} 
             />
         </div>
 
@@ -734,4 +769,4 @@ export default function App() {
       </div>
     </div>
   );
-}
+} 

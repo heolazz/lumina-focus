@@ -9,7 +9,7 @@ import { Stats } from './components/Stats';
 import { Settings } from './components/Settings';
 import { Auth } from './components/Auth';
 import { PersimmonMascot } from './components/Mascot';
-import { supabase } from './supabase'; // IMPORT SUPABASE
+import { supabase } from './supabase'; // Pastikan path ini benar
 
 // --- DATA & KONFIGURASI ---
 const MODE_CONFIG = {
@@ -101,11 +101,11 @@ const AUDIO_URLS = {
 
 // --- MAIN COMPONENT ---
 export default function App() {
-  // 1. AUTH STATE (Managed by Supabase Session)
+  // 1. AUTH STATE
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
 
-  // 2. APP STATES (Sekarang menggunakan useState biasa, bukan localStorage)
+  // 2. APP STATES
   const [activeTab, setActiveTab] = useState<TabView>('TIMER');
   const [mode, setMode] = useState<TimerMode>(TimerMode.POMODORO);
   
@@ -153,7 +153,6 @@ export default function App() {
       // 2. Fetch Tasks
       const { data: tasksData } = await supabase.from('tasks').select('*').eq('user_id', uid).order('created_at', { ascending: false });
       if (tasksData) {
-        // Map snake_case DB to camelCase Types
         const mappedTasks: Task[] = tasksData.map(t => ({
             id: t.id,
             title: t.title,
@@ -205,7 +204,7 @@ export default function App() {
   }, []);
 
   const handleLoginSuccess = () => {
-    // Triggered by Auth Component, actual state handled by onAuthStateChange
+    // Handled by onAuthStateChange
   };
 
   const handleLogout = async () => {
@@ -234,10 +233,7 @@ export default function App() {
     }
   };
 
-  // --- SYNC TASKS TO DB (DEBOUNCED) ---
-  // Note: For deletions to sync properly with this simple logic, 
-  // we technically need to handle delete actions explicitly. 
-  // For now, this syncs ADD and UPDATE.
+  // --- SYNC TASKS TO DB (UPSERT) ---
   useEffect(() => {
     if (isInitialLoad.current || !userId || tasks.length === 0) return;
 
@@ -254,10 +250,31 @@ export default function App() {
 
         const { error } = await supabase.from('tasks').upsert(tasksToUpsert);
         if (error) console.error("Error syncing tasks:", error);
-    }, 1000); // Wait 1s after last change
+    }, 1000); 
 
     return () => clearTimeout(timer);
   }, [tasks, userId]);
+
+  // --- DELETE TASK FUNCTION ---
+  const handleDeleteTask = async (taskId: string) => {
+    // 1. Optimistic Update (Hapus di UI dulu)
+    const newTasks = tasks.filter(t => t.id !== taskId);
+    setTasks(newTasks);
+    
+    // Jika task yang dihapus sedang aktif, matikan timer
+    if (activeTaskId === taskId) {
+        setActiveTaskId(null);
+        setIsActive(false);
+    }
+
+    // 2. Hapus dari Database
+    if (userId) {
+        const { error } = await supabase.from('tasks').delete().eq('id', taskId);
+        if (error) {
+            console.error("Error deleting task:", error);
+        }
+    }
+  };
 
 
   // --- APP LOGIC (TIMER & EFFECT) ---
@@ -390,26 +407,20 @@ export default function App() {
         setTasks(prev => prev.map(t => 
           t.id === activeTaskId ? { ...t, completedPomos: t.completedPomos + 1 } : t
         ));
-        // Note: The useEffect debounce will catch this update and sync to DB
       }
 
       // 3. Update & Sync Daily Stats
       const today = new Date().toISOString().split('T')[0];
       
-      // Optimistic Update
-      let newStats: DailyStat[] = [];
       setDailyStats(prev => {
         const existing = prev.find(s => s.date === today);
         if (existing) {
-          newStats = prev.map(s => s.date === today ? { ...s, minutes: s.minutes + minutesToAdd, sessions: s.sessions + 1 } : s);
-          return newStats;
+          return prev.map(s => s.date === today ? { ...s, minutes: s.minutes + minutesToAdd, sessions: s.sessions + 1 } : s);
         } else {
-          newStats = [...prev, { date: today, minutes: minutesToAdd, sessions: 1 }];
-          return newStats;
+          return [...prev, { date: today, minutes: minutesToAdd, sessions: 1 }];
         }
       });
 
-      // DB Update for Stats
       if (userId) {
           const { data: existingStat } = await supabase.from('daily_stats').select('*').eq('user_id', userId).eq('date', today).single();
           
@@ -703,7 +714,13 @@ export default function App() {
         )}
 
         <div className={`h-full w-full ${activeTab === 'TASKS' ? 'overflow-y-auto pb-24 md:pb-0' : 'hidden'}`}>
-            <TaskList tasks={tasks} setTasks={setTasks} activeTaskId={activeTaskId} setActiveTaskId={(id) => { setActiveTaskId(id); if(id) setActiveTab('TIMER'); }} />
+            <TaskList 
+                tasks={tasks} 
+                setTasks={setTasks} 
+                activeTaskId={activeTaskId} 
+                setActiveTaskId={(id) => { setActiveTaskId(id); if(id) setActiveTab('TIMER'); }}
+                onDelete={handleDeleteTask} // <--- PROPS PENTING UNTUK DELETE
+            />
         </div>
 
         <div className={`h-full w-full ${activeTab === 'STATS' ? 'overflow-y-auto pb-24 md:pb-0' : 'hidden'}`}>

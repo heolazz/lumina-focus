@@ -9,6 +9,7 @@ import { Stats } from './components/Stats';
 import { Settings } from './components/Settings';
 import { Auth } from './components/Auth';
 import { PersimmonMascot } from './components/Mascot';
+import { supabase } from './supabase'; // IMPORT SUPABASE
 
 // --- DATA & KONFIGURASI ---
 const MODE_CONFIG = {
@@ -98,51 +99,19 @@ const AUDIO_URLS = {
   BROWN: 'https://assets.mixkit.co/active_storage/sfx/209/209-preview.mp3',
 };
 
-// --- CUSTOM HOOK: PERSISTED STATE ---
-function usePersistedState<T>(key: string, initialValue: T): [T, React.Dispatch<React.SetStateAction<T>>] {
-  const [state, setState] = useState<T>(() => {
-    try {
-      const item = localStorage.getItem(key);
-      return item ? JSON.parse(item) : initialValue;
-    } catch (error) {
-      return initialValue;
-    }
-  });
-
-  useEffect(() => {
-    localStorage.setItem(key, JSON.stringify(state));
-  }, [key, state]);
-
-  return [state, setState];
-}
-
 // --- MAIN COMPONENT ---
 export default function App() {
-  // 1. AUTH STATE
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-      return localStorage.getItem('lumina_auth') === 'true';
-  });
+  // 1. AUTH STATE (Managed by Supabase Session)
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
 
-  const handleLoginSuccess = () => {
-      localStorage.setItem('lumina_auth', 'true');
-      setIsAuthenticated(true);
-  };
-
-  const handleLogout = () => {
-      localStorage.removeItem('lumina_auth');
-      setIsAuthenticated(false);
-      // Reset state penting saat logout (opsional)
-      setActiveTab('TIMER');
-      setMode(TimerMode.POMODORO);
-  };
-
-  // 2. APP STATES
+  // 2. APP STATES (Sekarang menggunakan useState biasa, bukan localStorage)
   const [activeTab, setActiveTab] = useState<TabView>('TIMER');
   const [mode, setMode] = useState<TimerMode>(TimerMode.POMODORO);
   
-  const [settings, setSettings] = usePersistedState<AppSettings>('lumina_settings', DEFAULT_SETTINGS);
-  const [tasks, setTasks] = usePersistedState<Task[]>('lumina_tasks', []);
-  const [dailyStats, setDailyStats] = usePersistedState<DailyStat[]>('lumina_stats', []);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [dailyStats, setDailyStats] = useState<DailyStat[]>([]);
   
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState(DEFAULT_SETTINGS.durations[TimerMode.POMODORO] * 60);
@@ -156,16 +125,143 @@ export default function App() {
   const [currentQuote, setCurrentQuote] = useState("");
   const [showConfetti, setShowConfetti] = useState(false);
   const [endTime, setEndTime] = useState<number | null>(null);
-
-  // PWA Install Prompt State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
   const alarmRef = useRef<HTMLAudioElement>(null);
   const noiseRef = useRef<HTMLAudioElement>(null);
+  const isInitialLoad = useRef(true);
 
-  // --- EFFECTS & LOGIC ---
+  // --- INITIAL DATA FETCHING (SUPABASE) ---
+  const fetchUserData = async (uid: string) => {
+    try {
+      // 1. Fetch Settings
+      const { data: settingsData } = await supabase.from('settings').select('*').eq('user_id', uid).single();
+      if (settingsData) {
+        setSettings({
+            durations: {
+                [TimerMode.POMODORO]: settingsData.pomo_duration,
+                [TimerMode.SHORT_BREAK]: settingsData.short_break_duration,
+                [TimerMode.LONG_BREAK]: settingsData.long_break_duration,
+            },
+            autoStartBreaks: settingsData.auto_start_breaks,
+            autoStartPomos: settingsData.auto_start_pomos,
+            whiteNoise: settingsData.white_noise,
+            volume: settingsData.volume
+        });
+      }
 
-  // PWA: Capture install prompt
+      // 2. Fetch Tasks
+      const { data: tasksData } = await supabase.from('tasks').select('*').eq('user_id', uid).order('created_at', { ascending: false });
+      if (tasksData) {
+        // Map snake_case DB to camelCase Types
+        const mappedTasks: Task[] = tasksData.map(t => ({
+            id: t.id,
+            title: t.title,
+            completed: t.completed,
+            estimatedPomos: t.estimated_pomos,
+            completedPomos: t.completed_pomos,
+            tag: t.tag
+        }));
+        setTasks(mappedTasks);
+      }
+
+      // 3. Fetch Stats
+      const { data: statsData } = await supabase.from('daily_stats').select('*').eq('user_id', uid);
+      if (statsData) {
+        setDailyStats(statsData);
+      }
+      
+      isInitialLoad.current = false;
+
+    } catch (error) {
+        console.error("Error fetching data:", error);
+    }
+  };
+
+  // Check Auth Session on Mount
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        setIsAuthenticated(true);
+        setUserId(session.user.id);
+        fetchUserData(session.user.id);
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        setIsAuthenticated(true);
+        setUserId(session.user.id);
+        if (isInitialLoad.current) fetchUserData(session.user.id);
+      } else {
+        setIsAuthenticated(false);
+        setUserId(null);
+        setTasks([]);
+        setDailyStats([]);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleLoginSuccess = () => {
+    // Triggered by Auth Component, actual state handled by onAuthStateChange
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setIsAuthenticated(false);
+    setActiveTab('TIMER');
+    setMode(TimerMode.POMODORO);
+  };
+
+  // --- SYNC SETTINGS TO DB ---
+  const updateSettings = async (newSettings: Partial<AppSettings>) => {
+    const updated = { ...settings, ...newSettings };
+    setSettings(updated);
+
+    if (userId) {
+        await supabase.from('settings').upsert({
+            user_id: userId,
+            pomo_duration: updated.durations[TimerMode.POMODORO],
+            short_break_duration: updated.durations[TimerMode.SHORT_BREAK],
+            long_break_duration: updated.durations[TimerMode.LONG_BREAK],
+            auto_start_breaks: updated.autoStartBreaks,
+            auto_start_pomos: updated.autoStartPomos,
+            white_noise: updated.whiteNoise,
+            volume: updated.volume
+        });
+    }
+  };
+
+  // --- SYNC TASKS TO DB (DEBOUNCED) ---
+  // Note: For deletions to sync properly with this simple logic, 
+  // we technically need to handle delete actions explicitly. 
+  // For now, this syncs ADD and UPDATE.
+  useEffect(() => {
+    if (isInitialLoad.current || !userId || tasks.length === 0) return;
+
+    const timer = setTimeout(async () => {
+        const tasksToUpsert = tasks.map(t => ({
+            id: t.id,
+            user_id: userId,
+            title: t.title,
+            completed: t.completed,
+            estimated_pomos: t.estimatedPomos,
+            completed_pomos: t.completedPomos,
+            tag: t.tag
+        }));
+
+        const { error } = await supabase.from('tasks').upsert(tasksToUpsert);
+        if (error) console.error("Error syncing tasks:", error);
+    }, 1000); // Wait 1s after last change
+
+    return () => clearTimeout(timer);
+  }, [tasks, userId]);
+
+
+  // --- APP LOGIC (TIMER & EFFECT) ---
+
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: any) => {
       e.preventDefault();
@@ -186,14 +282,12 @@ export default function App() {
     }
   };
 
-  // Request Notification Permission
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") {
       Notification.requestPermission();
     }
   }, []);
 
-  // Dynamic Title
   const minutes = Math.floor(timeLeft / 60);
   const seconds = timeLeft % 60;
   const formattedTime = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
@@ -208,15 +302,12 @@ export default function App() {
     }
   }, [formattedTime, isActive, isPausedMode, mode]);
 
-  // Sync Timer with Settings
   useEffect(() => {
     if (!isActive && !isPausedMode && !pendingMode && !completionType) {
       setTimeLeft(settings.durations[mode] * 60);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.durations, mode]); 
 
-  // Audio Handler
   useEffect(() => {
     if (!noiseRef.current) return;
     if (settings.whiteNoise === 'NONE' || !isActive || isPausedMode || pendingMode || completionType || mode !== TimerMode.POMODORO) {
@@ -236,7 +327,6 @@ export default function App() {
     }
   }, [settings.whiteNoise, settings.volume, isActive, isPausedMode, pendingMode, completionType, mode]);
 
-  // Timer Handlers
   const switchMode = useCallback((newMode: TimerMode, autoStart = false) => {
     setMode(newMode);
     const newDuration = settings.durations[newMode] * 60;
@@ -271,13 +361,12 @@ export default function App() {
     }
   };
 
-  const handleTimerComplete = () => {
+  const handleTimerComplete = async () => {
     setIsActive(false);
     setIsPausedMode(false);
     setEndTime(null);
     setShowConfetti(true);
     
-    // System Notification
     if ("Notification" in window && Notification.permission === "granted") {
       new Notification(mode === TimerMode.POMODORO ? "Session Complete! 🎉" : "Break is Over! ⏰", {
         body: mode === TimerMode.POMODORO ? "Great job! Time to take a break." : "Ready to focus again?",
@@ -290,48 +379,54 @@ export default function App() {
       alarmRef.current.play().catch(e => console.log(e));
     }
 
-    // --- LOGIC PERUBAHAN DI SINI ---
     if (mode === TimerMode.POMODORO) {
-      // 1. Hitung total durasi target dalam detik
+      // 1. Calculate Elapsed Minutes
       const targetDurationSeconds = settings.durations[mode] * 60;
-      
-      // 2. Hitung berapa detik yang SUDAH berjalan (Elapsed)
-      // Kita gunakan Math.max(0, ...) untuk menghindari angka negatif
       const elapsedSeconds = Math.max(0, targetDurationSeconds - timeLeft);
-      
-      // 3. Konversi ke menit (dibulatkan ke bawah atau ke menit terdekat)
-      // Jika selesai natural (timeLeft=0), hasilnya full. Jika di-cut tengah jalan, hasilnya parsial.
-      // Kita pakai Math.floor agar tercatat menit penuh yang sudah dilalui.
-      // Opsional: Gunakan Math.max(1, ...) jika ingin minimal mencatat 1 menit.
       const minutesToAdd = Math.floor(elapsedSeconds / 60);
 
+      // 2. Update Task Pomo Count
       if (activeTaskId) {
         setTasks(prev => prev.map(t => 
-          // Update completedPomos bisa tetap +1 (dihitung 1 sesi) atau mau proporsional?
-          // Biasanya "Session" tetap dihitung 1 kali "mark as done", tapi menitnya yang disesuaikan.
           t.id === activeTaskId ? { ...t, completedPomos: t.completedPomos + 1 } : t
         ));
+        // Note: The useEffect debounce will catch this update and sync to DB
       }
-      
+
+      // 3. Update & Sync Daily Stats
       const today = new Date().toISOString().split('T')[0];
+      
+      // Optimistic Update
+      let newStats: DailyStat[] = [];
       setDailyStats(prev => {
         const existing = prev.find(s => s.date === today);
         if (existing) {
-          return prev.map(s => 
-            s.date === today ? { 
-              ...s, 
-              minutes: s.minutes + minutesToAdd, // <--- UPDATE: Pakai minutesToAdd, bukan settings.durations
-              sessions: s.sessions + 1 
-            } : s
-          );
+          newStats = prev.map(s => s.date === today ? { ...s, minutes: s.minutes + minutesToAdd, sessions: s.sessions + 1 } : s);
+          return newStats;
         } else {
-          return [...prev, { 
-            date: today, 
-            minutes: minutesToAdd, // <--- UPDATE: Pakai minutesToAdd
-            sessions: 1 
-          }];
+          newStats = [...prev, { date: today, minutes: minutesToAdd, sessions: 1 }];
+          return newStats;
         }
       });
+
+      // DB Update for Stats
+      if (userId) {
+          const { data: existingStat } = await supabase.from('daily_stats').select('*').eq('user_id', userId).eq('date', today).single();
+          
+          if (existingStat) {
+             await supabase.from('daily_stats').update({
+                 minutes: existingStat.minutes + minutesToAdd,
+                 sessions: existingStat.sessions + 1
+             }).eq('id', existingStat.id);
+          } else {
+             await supabase.from('daily_stats').insert({
+                 user_id: userId,
+                 date: today,
+                 minutes: minutesToAdd,
+                 sessions: 1
+             });
+          }
+      }
 
       setCurrentQuote(getRandomQuote());
       setCompletionType('FOCUS_DONE');
@@ -383,10 +478,6 @@ export default function App() {
       }
   };
 
-  const updateSettings = (newSettings: Partial<AppSettings>) => {
-    setSettings(prev => ({ ...prev, ...newSettings }));
-  };
-
   useEffect(() => {
     let interval: number;
     if (isActive && endTime && !pendingMode && !completionType) {
@@ -405,7 +496,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, [isActive, endTime, pendingMode, completionType]);
 
-  // Derived UI Data
   const totalTime = settings.durations[mode] * 60;
   const progress = totalTime > 0 ? ((totalTime - timeLeft) / totalTime) * 100 : 0;
   const bgClass = (activeTab === 'TIMER' || activeTab === 'SETTINGS') ? 'bg-nature-500' : 'bg-nature-50';
@@ -414,21 +504,16 @@ export default function App() {
   const todayStats = dailyStats.find(s => s.date === todayStr);
   const sessionsToday = todayStats ? todayStats.sessions : 0;
 
-  // --- RENDER ---
-
-  // 1. IF NOT AUTHENTICATED -> SHOW LOGIN
   if (!isAuthenticated) {
       return <Auth onLogin={handleLoginSuccess} />;
   }
 
-  // 2. IF AUTHENTICATED -> SHOW APP
   return (
     <div className={`flex flex-col h-[100dvh] font-sans transition-colors duration-500 overflow-hidden ${bgClass}`}>
       <audio ref={alarmRef} src={AUDIO_URLS.ALARM} />
       <audio ref={noiseRef} />
 
       <AnimatePresence>
-        {/* START ANIMATION */}
         {isTransitioning && (
             <motion.div 
                 className="fixed inset-0 z-[40] flex items-center justify-center pointer-events-auto"
@@ -456,7 +541,6 @@ export default function App() {
             </motion.div>
         )}
 
-        {/* PAUSE ANIMATION */}
         {isPausedMode && (
             <motion.div className="fixed inset-0 z-[40] flex flex-col items-center justify-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                 <motion.div className="absolute bg-blue-400 rounded-full" initial={{ width: 0, height: 0 }} animate={{ width: 2500, height: 2500 }} exit={{ opacity: 0 }} transition={{ duration: 0.6, ease: "circOut" }} />
@@ -478,7 +562,6 @@ export default function App() {
             </motion.div>
         )}
 
-        {/* CONFIRM SWITCH MODAL */}
         {pendingMode && (
             <motion.div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm px-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                 <motion.div className="bg-white rounded-[2.5rem] p-6 w-full max-w-sm shadow-2xl relative overflow-hidden" initial={{ scale: 0.8, y: 50 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.8, opacity: 0 }}>
@@ -496,7 +579,6 @@ export default function App() {
             </motion.div>
         )}
 
-        {/* COMPLETION OVERLAY */}
         {completionType && (
             <motion.div className="fixed inset-0 z-[70] flex items-center justify-center p-6" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                 <motion.div className={`absolute inset-0 ${completionType === 'FOCUS_DONE' ? 'bg-nature-500/95' : 'bg-blue-500/95'} backdrop-blur-md`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} />
@@ -532,7 +614,6 @@ export default function App() {
       
       <main className="flex-1 w-full relative h-full overflow-hidden">
         
-        {/* --- SETTINGS TAB (Updated with Install & Logout) --- */}
         <div className={`h-full w-full ${activeTab === 'SETTINGS' ? 'overflow-y-auto pb-24 md:pb-0' : 'hidden'}`}>
              <Settings 
                 settings={settings} 
@@ -543,14 +624,12 @@ export default function App() {
              />
         </div>
 
-        {/* --- TIMER TAB --- */}
         {activeTab === 'TIMER' && (
           <div className="flex flex-col md:flex-row items-center justify-center md:justify-center h-full w-full px-6 pt-8 pb-28 md:pb-0 md:pt-0 gap-4 md:gap-16 max-w-5xl mx-auto relative">
              <div className="absolute inset-0 pointer-events-none overflow-hidden">
                 <div className="absolute top-[5%] left-[5%] w-[50%] h-[50%] bg-white opacity-5 rounded-full blur-[120px]"></div>
              </div>
 
-             {/* MOBILE MODE TOGGLES */}
              <div className="md:hidden w-full flex justify-center z-30 mb-2">
                 <div className="bg-black/10 backdrop-blur-md p-1.5 rounded-full flex gap-1 shadow-inner">
                     {(Object.keys(TimerMode) as Array<keyof typeof TimerMode>).map((m) => (
@@ -563,7 +642,6 @@ export default function App() {
                 </div>
              </div>
 
-             {/* TIMER VISUAL */}
              <div className="flex-none md:flex-1 -mb-8 flex flex-col justify-center items-center relative z-10 w-full md:mb-0">
                 <div className="transform transition-transform duration-500 scale-75 md:scale-110">
                   <CircularTimer progress={progress} isInverted={true} size={320} strokeWidth={6}>
@@ -585,9 +663,7 @@ export default function App() {
                 </div>
              </div>
 
-             {/* CONTROLS */}
              <div className="flex-none md:flex-1 flex flex-col items-center md:items-start justify-center md:justify-center z-20 w-full md:w-auto text-white space-y-4 md:space-y-8 md:pl-8">
-                {/* DESKTOP TOGGLES */}
                 <div className="hidden md:flex bg-black/10 backdrop-blur-md p-1.5 rounded-full gap-1 shadow-inner scale-100">
                     {(Object.keys(TimerMode) as Array<keyof typeof TimerMode>).map((m) => (
                       <button key={m} onClick={() => handleModeClick(TimerMode[m])} className={`w-12 h-10 rounded-full transition-all flex items-center justify-center ${mode === TimerMode[m] ? 'bg-white text-nature-600 shadow-md scale-100' : 'text-white/60 hover:text-white hover:bg-white/10 scale-95'}`}>
@@ -598,7 +674,6 @@ export default function App() {
                     ))}
                 </div>
 
-                {/* TEXT HEADER */}
                 <div className="flex items-center gap-4 md:block text-left w-full md:w-auto justify-center md:justify-start px-4 md:px-0">
                    <div className="md:hidden transform scale-90" onClick={() => setShowConfetti(true)}>
                       <PersimmonMascot happy={isActive} className="w-16 h-16 animate-bounce-slow" />
@@ -613,7 +688,6 @@ export default function App() {
                    </div>
                 </div>
 
-                {/* MAIN START BUTTON */}
                 <button
                   onClick={handleToggleTimer}
                   className={`w-64 md:w-64 h-16 md:h-20 rounded-[2.5rem] font-black text-xl md:text-2xl tracking-wide shadow-xl transition-all transform active:scale-95 flex items-center justify-center gap-3 ${isActive ? 'bg-nature-800/30 text-white border-2 border-white/30 hover:bg-nature-800/50' : 'bg-white text-nature-600 hover:shadow-2xl hover:-translate-y-1'}`}
@@ -621,7 +695,6 @@ export default function App() {
                   {isActive ? MODE_CONFIG[mode].pauseBtn : MODE_CONFIG[mode].startBtn}
                 </button>
 
-                {/* DESKTOP MASCOT */}
                 <div className="hidden md:block absolute bottom-10 right-10 transform hover:scale-110 transition-transform cursor-pointer" onClick={() => setShowConfetti(true)}>
                    <PersimmonMascot happy={isActive} />
                 </div>
@@ -629,7 +702,6 @@ export default function App() {
           </div>
         )}
 
-        {/* --- TASKS & STATS TABS --- */}
         <div className={`h-full w-full ${activeTab === 'TASKS' ? 'overflow-y-auto pb-24 md:pb-0' : 'hidden'}`}>
             <TaskList tasks={tasks} setTasks={setTasks} activeTaskId={activeTaskId} setActiveTaskId={(id) => { setActiveTaskId(id); if(id) setActiveTab('TIMER'); }} />
         </div>
@@ -640,7 +712,6 @@ export default function App() {
 
       </main>
 
-      {/* Floating Mobile Nav */}
       <div className="md:hidden relative z-50">
          <BottomNav currentTab={activeTab} setTab={setActiveTab} isDarkBg={isFocusMode} />
       </div>

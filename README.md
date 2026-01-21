@@ -3,6 +3,10 @@
 
 > **A mindful productivity companion designed to help you stay in the flow.**
 > Featuring a Pomodoro timer, task management, and a friendly Persimmon mascot.
+<img width="1920" height="904" alt="image" src="https://github.com/user-attachments/assets/2c54d063-f4bc-433a-9631-6a4d36ba434a" />
+<img width="1899" height="884" alt="image" src="https://github.com/user-attachments/assets/152ddd9b-e9cd-4c47-99a7-a133536af74a" />
+<img width="1916" height="905" alt="image" src="https://github.com/user-attachments/assets/5330343a-a403-4e4f-983e-3f827f8f1f96" />
+<img width="1907" height="895" alt="image" src="https://github.com/user-attachments/assets/84add14d-0384-4adc-980e-df1d32f69a01" />
 
 
 ## Overview

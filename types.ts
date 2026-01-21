@@ -6,7 +6,8 @@ export enum TimerMode {
 
 export type TabView = 'TIMER' | 'TASKS' | 'STATS' | 'SETTINGS';
 
-export type TaskTag = 'Work' | 'Study' | 'Code' | 'Read' | 'Other';
+// UPDATE INI: Sesuaikan dengan kategori di TaskList.tsx
+export type TaskTag = 'Work' | 'Study' | 'Personal' | 'Creative';
 
 export interface Task {
   id: string;
@@ -14,7 +15,7 @@ export interface Task {
   completed: boolean;
   estimatedPomos: number;
   completedPomos: number;
-  tag: TaskTag;
+  tag: TaskTag; // Pastikan ini menggunakan tipe TaskTag di atas
 }
 
 export interface DailyStat {

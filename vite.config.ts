@@ -14,7 +14,7 @@ export default defineConfig({
         name: 'Lumina Focus',
         short_name: 'Lumina',
         description: 'Your personal focus timer with a friendly mascot.',
-        theme_color: '#22C55E', // Warna status bar (Hijau Nature)
+        theme_color: '#608f3f', // Warna status bar (Hijau Nature)
         background_color: '#ffffff',
         display: 'standalone', // Tampilan seperti aplikasi native (tanpa bar browser)
         orientation: 'portrait',
